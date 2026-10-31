@@ -10,6 +10,8 @@ swift build -c release
 
 APP_NAME="File Finder"
 BIN_NAME="FileFinder"
+VERSION="${APP_VERSION:-1.2.0}"
+BUILD_NUM="${BUILD_NUMBER:-3}"
 BUILD_BIN=".build/release/${BIN_NAME}"
 DIST_DIR="dist"
 APP_BUNDLE="${DIST_DIR}/${APP_NAME}.app"
@@ -52,9 +54,9 @@ cat <<EOF > "${CONTENTS_DIR}/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>${VERSION}</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>${BUILD_NUM}</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
