@@ -4,15 +4,29 @@ import SwiftUI
 public struct FileCardView: View {
     public let item: FileItem
     public let isOCRMatch: Bool
+    public let isSelected: Bool
     public let cardWidth: CGFloat
+    public let selectedURLs: [URL]?
+    public let onSelect: (() -> Void)?
     public let onTrash: ((FileItem) -> Void)?
     @State private var thumbnail: NSImage? = nil
     @State private var isHovered: Bool = false
 
-    public init(item: FileItem, isOCRMatch: Bool = false, cardWidth: CGFloat = 190, onTrash: ((FileItem) -> Void)? = nil) {
+    public init(
+        item: FileItem,
+        isOCRMatch: Bool = false,
+        isSelected: Bool = false,
+        cardWidth: CGFloat = 190,
+        selectedURLs: [URL]? = nil,
+        onSelect: (() -> Void)? = nil,
+        onTrash: ((FileItem) -> Void)? = nil
+    ) {
         self.item = item
         self.isOCRMatch = isOCRMatch
+        self.isSelected = isSelected
         self.cardWidth = cardWidth
+        self.selectedURLs = selectedURLs
+        self.onSelect = onSelect
         self.onTrash = onTrash
     }
 
@@ -89,7 +103,7 @@ public struct FileCardView: View {
             // File Metadata
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name)
-                    .font(.system(size: cardWidth < 160 ? 11 : 12.5, weight: .medium, design: .rounded))
+                    .font(.system(size: cardWidth < 160 ? 11 : 12.5, weight: isSelected ? .semibold : .medium, design: .rounded))
                     .foregroundColor(Color(nsColor: .labelColor))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -106,14 +120,30 @@ public struct FileCardView: View {
         }
         .padding(9)
         .frame(width: cardWidth)
-        .background(ScandinavianTheme.cardBackground)
+        .background(
+            isSelected
+                ? Color.accentColor.opacity(0.12)
+                : ScandinavianTheme.cardBackground
+        )
         .clipShape(RoundedRectangle(cornerRadius: ScandinavianTheme.cardCornerRadius))
         .overlay(
             RoundedRectangle(cornerRadius: ScandinavianTheme.cardCornerRadius)
-                .stroke(isHovered ? Color.accentColor.opacity(0.35) : ScandinavianTheme.hairlineBorder, lineWidth: 1)
+                .stroke(
+                    isSelected
+                        ? Color.accentColor
+                        : (isHovered ? Color.accentColor.opacity(0.35) : ScandinavianTheme.hairlineBorder),
+                    lineWidth: isSelected ? 2 : 1
+                )
         )
-        .shadow(color: isHovered ? Color.black.opacity(0.08) : ScandinavianTheme.softShadow, radius: isHovered ? 12 : 5, y: isHovered ? 5 : 2)
+        .shadow(
+            color: isSelected
+                ? Color.accentColor.opacity(0.22)
+                : (isHovered ? Color.black.opacity(0.08) : ScandinavianTheme.softShadow),
+            radius: isHovered || isSelected ? 10 : 5,
+            y: isHovered || isSelected ? 4 : 2
+        )
         .animation(.easeInOut(duration: 0.15), value: isHovered)
+        .animation(.easeInOut(duration: 0.15), value: isSelected)
         .pointerOnHover()
         .onHover { hovering in
             isHovered = hovering
@@ -121,41 +151,27 @@ public struct FileCardView: View {
         .task(id: item.url) {
             thumbnail = await ThumbnailService.shared.thumbnail(for: item.url)
         }
+        .onTapGesture {
+            onSelect?()
+        }
         .onTapGesture(count: 2) {
             NSWorkspace.shared.open(item.url)
         }
-        .contextMenu {
-            Button("Open") {
-                NSWorkspace.shared.open(item.url)
+        .onDrag {
+            let urlsToDrag: [URL]
+            if let selected = selectedURLs, selected.contains(item.url), selected.count > 1 {
+                urlsToDrag = selected
+            } else {
+                urlsToDrag = [item.url]
             }
-
-            Button("Reveal in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([item.url])
-            }
-
-            Button("Copy Path") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(item.url.path, forType: .string)
-            }
-
-            if let originURL = item.originURL {
-                Button("Copy Download Source URL") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(originURL.absoluteString, forType: .string)
-                }
-            }
-
-            Divider()
-
-            Button(role: .destructive) {
-                if let onTrash = onTrash {
-                    onTrash(item)
-                } else {
-                    try? FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
-                }
-            } label: {
-                Label("Move to Trash", systemImage: "trash")
-            }
+            return MultiSelectionHelper.createMultiFileItemProvider(for: item.url, selectedURLs: urlsToDrag)
         }
+        .fileContextMenu(for: item, onTrash: { fileToTrash in
+            if let onTrash = onTrash {
+                onTrash(fileToTrash)
+            } else {
+                try? FileManager.default.trashItem(at: fileToTrash.url, resultingItemURL: nil)
+            }
+        })
     }
 }

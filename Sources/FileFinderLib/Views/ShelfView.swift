@@ -3,12 +3,20 @@ import SwiftUI
 public struct ShelfView: View {
     public let category: ShelfCategory
     public let items: [FileItem]
+    public let viewModel: ScannerViewModel?
     public let onSeeAll: (() -> Void)?
     public let onTrash: ((FileItem) -> Void)?
 
-    public init(category: ShelfCategory, items: [FileItem], onSeeAll: (() -> Void)? = nil, onTrash: ((FileItem) -> Void)? = nil) {
+    public init(
+        category: ShelfCategory,
+        items: [FileItem],
+        viewModel: ScannerViewModel? = nil,
+        onSeeAll: (() -> Void)? = nil,
+        onTrash: ((FileItem) -> Void)? = nil
+    ) {
         self.category = category
         self.items = items
+        self.viewModel = viewModel
         self.onSeeAll = onSeeAll
         self.onTrash = onTrash
     }
@@ -59,14 +67,47 @@ public struct ShelfView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: 16) {
-                        ForEach(items.prefix(20)) { item in
-                            FileCardView(item: item, onTrash: onTrash)
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(spacing: 16) {
+                            ForEach(items.prefix(20)) { item in
+                                let isSelected = (viewModel?.selectedFileSet.contains(item.url) ?? false) || (viewModel?.selectedFile?.url == item.url)
+
+                                FileCardView(
+                                    item: item,
+                                    isSelected: isSelected,
+                                    selectedURLs: viewModel.map { Array($0.selectedFileSet) },
+                                    onSelect: {
+                                        if let vm = viewModel {
+                                            let flags = NSEvent.modifierFlags
+                                            if flags.contains(.command) {
+                                                vm.toggleFileSelection(item)
+                                            } else if flags.contains(.shift) {
+                                                vm.selectFileRange(to: item)
+                                            } else {
+                                                vm.selectSingleFile(item)
+                                            }
+                                            vm.selectedDuplicateGroup = nil
+                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                                vm.isDetailInspectorVisible = true
+                                            }
+                                        }
+                                    },
+                                    onTrash: onTrash
+                                )
+                                .id(item.id)
+                            }
+                        }
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 6)
+                    }
+                    .onChange(of: viewModel?.selectedFile) { _, newFile in
+                        if let file = newFile, items.prefix(20).contains(where: { $0.url == file.url }) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                proxy.scrollTo(file.id, anchor: nil)
+                            }
                         }
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 6)
                 }
             }
         }

@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import FileFinderLib
 
-@Suite("Sidebar Reordering & Location Tests")
+@Suite("Sidebar Reordering & Location Tests", .serialized)
 struct SidebarReorderTests {
 
     @Test("Sidebar section kind defaults and titles")

@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import FileFinderLib
 
-@Suite("Installed Applications Tests")
+@Suite("Installed Applications Tests", .serialized)
 struct ApplicationsTests {
 
     @Test("InstalledAppItem properties and formatted helpers")

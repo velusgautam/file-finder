@@ -184,4 +184,67 @@ public enum DownloadOrigin: Hashable, Sendable {
 
         return .unknown
     }
+
+    public var rawIdentifier: String {
+        switch self {
+        case .chrome:      return "chrome"
+        case .safari:      return "safari"
+        case .arc:         return "arc"
+        case .slack:       return "slack"
+        case .discord:     return "discord"
+        case .chatgpt:     return "chatgpt"
+        case .gmail:       return "gmail"
+        case .googleDrive: return "googleDrive"
+        case .whatsapp:    return "whatsapp"
+        case .github:      return "github"
+        case .figma:       return "figma"
+        case .canva:       return "canva"
+        case .x:           return "x"
+        case .notion:      return "notion"
+        case .pinterest:   return "pinterest"
+        case .mail:        return "mail"
+        case .telegram:    return "telegram"
+        case .airdrop:     return "airdrop"
+        case .custom(let appName, let domain):
+            if let domain = domain {
+                return "custom:\(appName)|\(domain)"
+            } else {
+                return "custom:\(appName)"
+            }
+        case .unknown:     return "unknown"
+        }
+    }
+
+    public static func from(rawIdentifier: String) -> DownloadOrigin {
+        switch rawIdentifier {
+        case "chrome":      return .chrome
+        case "safari":      return .safari
+        case "arc":         return .arc
+        case "slack":       return .slack
+        case "discord":     return .discord
+        case "chatgpt":     return .chatgpt
+        case "gmail":       return .gmail
+        case "googleDrive": return .googleDrive
+        case "whatsapp":    return .whatsapp
+        case "github":      return .github
+        case "figma":       return .figma
+        case "canva":       return .canva
+        case "x":           return .x
+        case "notion":      return .notion
+        case "pinterest":   return .pinterest
+        case "mail":        return .mail
+        case "telegram":    return .telegram
+        case "airdrop":     return .airdrop
+        case "unknown":     return .unknown
+        default:
+            if rawIdentifier.hasPrefix("custom:") {
+                let rest = String(rawIdentifier.dropFirst(7))
+                let parts = rest.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+                let appName = String(parts.first ?? "")
+                let domain = parts.count > 1 && !parts[1].isEmpty ? String(parts[1]) : nil
+                return .custom(appName: appName, domain: domain)
+            }
+            return .unknown
+        }
+    }
 }

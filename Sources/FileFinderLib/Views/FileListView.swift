@@ -29,24 +29,26 @@ public struct FileListView: View {
     }
 
     private var sortedFolders: [FolderItem] {
-        guard !folders.isEmpty else { return [] }
-        let sorted: [FolderItem]
-        switch viewModel.selectedSortOption {
-        case .name:
-            sorted = folders.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        case .dateModified:
-            sorted = folders.sorted { $0.modificationDate < $1.modificationDate }
-        case .size:
-            sorted = folders.sorted { $0.itemCount < $1.itemCount }
-        default:
-            sorted = folders
+        var sorted = folders
+        let isAscending = (viewModel.selectedSortOrder == .ascending)
+
+        sorted.sort { (f1: FolderItem, f2: FolderItem) -> Bool in
+            switch viewModel.selectedSortOption {
+            case .name:
+                let cmp = f1.name.localizedCaseInsensitiveCompare(f2.name)
+                return isAscending ? (cmp == .orderedAscending) : (cmp == .orderedDescending)
+            case .dateModified, .dateCreated:
+                return isAscending ? f1.modificationDate < f2.modificationDate : f1.modificationDate > f2.modificationDate
+            case .size:
+                return isAscending ? f1.itemCount < f2.itemCount : f1.itemCount > f2.itemCount
+            }
         }
-        return viewModel.selectedSortOrder == .ascending ? sorted : Array(sorted.reversed())
+        return sorted
     }
 
     public var body: some View {
         VStack(spacing: 0) {
-            // Table Header Row
+            // Table Header Bar
             HStack(spacing: 12) {
                 // Name Column
                 headerCell(title: "Name", option: .name, alignment: .leading)
@@ -66,17 +68,23 @@ public struct FileListView: View {
                     .foregroundColor(.secondary)
                     .frame(width: 95, alignment: .leading)
 
-                // Source / Origin Column
+                // Source Column
                 Text("Source")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundColor(.secondary)
                     .frame(width: 110, alignment: .leading)
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 26)
             .padding(.vertical, 8)
-            .background(Color.primary.opacity(0.02))
-            .overlay(Divider().opacity(0.3), alignment: .bottom)
+            .background(Color.primary.opacity(0.025))
+            .overlay(
+                Rectangle()
+                    .fill(ScandinavianTheme.hairlineBorder)
+                    .frame(height: 1),
+                alignment: .bottom
+            )
 
+            // Content Area
             if folders.isEmpty && items.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "folder")
@@ -91,34 +99,68 @@ public struct FileListView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.top, 60)
             } else {
-                // Virtualized Scroll List
-                ScrollView {
-                    LazyVStack(spacing: 1) {
-                        // Subfolders first (just like macOS Finder)
-                        ForEach(sortedFolders) { folder in
-                            FolderListRowView(
-                                folder: folder,
-                                onOpen: { onOpenFolder?(folder) },
-                                onTrash: onTrashFolder != nil ? { onTrashFolder?(folder) } : nil
-                            )
+                // Virtualized Scroll List with ScrollViewReader for auto-scroll
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 1) {
+                            // Subfolders first (just like macOS Finder)
+                            ForEach(sortedFolders) { folder in
+                                let isFolderSelected = viewModel.selectedFolder?.url == folder.url
+                                FolderListRowView(
+                                    folder: folder,
+                                    isSelected: isFolderSelected,
+                                    onOpen: { onOpenFolder?(folder) },
+                                    onSelect: {
+                                        viewModel.selectSingleFolder(folder)
+                                    },
+                                    onTrash: onTrashFolder != nil ? { onTrashFolder?(folder) } : nil
+                                )
+                                .id(folder.id)
+                            }
+
+                            // Files second
+                            ForEach(items) { displayItem in
+                                let item = displayItem.item
+                                let isSelected = viewModel.selectedFileSet.contains(item.url) || viewModel.selectedFile?.url == item.url
+
+                                FileListRowView(
+                                    item: item,
+                                    isOCRMatch: displayItem.isOCRMatch,
+                                    isSelected: isSelected,
+                                    selectedURLs: Array(viewModel.selectedFileSet),
+                                    onSelect: {
+                                        let flags = NSEvent.modifierFlags
+                                        if flags.contains(.command) {
+                                            viewModel.toggleFileSelection(item)
+                                        } else if flags.contains(.shift) {
+                                            viewModel.selectFileRange(to: item)
+                                        } else {
+                                            viewModel.selectSingleFile(item)
+                                        }
+                                        onSelect(item)
+                                    },
+                                    onTrash: { onTrash(item) }
+                                )
+                                .id(item.id)
+                            }
                         }
-
-                        // Files second
-                        ForEach(items) { displayItem in
-                            let item = displayItem.item
-                            let isSelected = viewModel.selectedFile?.url == item.url
-
-                            FileListRowView(
-                                item: item,
-                                isOCRMatch: displayItem.isOCRMatch,
-                                isSelected: isSelected,
-                                onSelect: { onSelect(item) },
-                                onTrash: { onTrash(item) }
-                            )
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                    }
+                    .onChange(of: viewModel.selectedFile) { _, newFile in
+                        if let file = newFile {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                proxy.scrollTo(file.id, anchor: nil)
+                            }
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
+                    .onChange(of: viewModel.selectedFolder) { _, newFolder in
+                        if let folder = newFolder {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                proxy.scrollTo(folder.id, anchor: nil)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -153,14 +195,24 @@ public struct FileListView: View {
 /// Unified Finder-style list row for folders
 public struct FolderListRowView: View {
     public let folder: FolderItem
+    public let isSelected: Bool
     public let onOpen: () -> Void
+    public let onSelect: (() -> Void)?
     public let onTrash: (() -> Void)?
 
     @State private var isHovered: Bool = false
 
-    public init(folder: FolderItem, onOpen: @escaping () -> Void, onTrash: (() -> Void)? = nil) {
+    public init(
+        folder: FolderItem,
+        isSelected: Bool = false,
+        onOpen: @escaping () -> Void,
+        onSelect: (() -> Void)? = nil,
+        onTrash: (() -> Void)? = nil
+    ) {
         self.folder = folder
+        self.isSelected = isSelected
         self.onOpen = onOpen
+        self.onSelect = onSelect
         self.onTrash = onTrash
     }
 
@@ -174,7 +226,7 @@ public struct FolderListRowView: View {
                     .frame(width: 20, height: 20)
 
                 Text(folder.name)
-                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                    .font(.system(size: 12.5, weight: isSelected ? .bold : .semibold, design: .rounded))
                     .foregroundColor(Color(nsColor: .labelColor))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -215,7 +267,11 @@ public struct FolderListRowView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(isHovered ? Color.primary.opacity(0.04) : Color.clear)
+        .background(
+            isSelected
+                ? Color.accentColor.opacity(0.12)
+                : (isHovered ? Color.primary.opacity(0.04) : Color.clear)
+        )
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
         .pointerOnHover()
@@ -223,6 +279,9 @@ public struct FolderListRowView: View {
             isHovered = hovering
         }
         .onTapGesture {
+            onSelect?()
+        }
+        .onTapGesture(count: 2) {
             onOpen()
         }
         .contextMenu {
@@ -257,6 +316,7 @@ public struct FileListRowView: View {
     public let item: FileItem
     public let isOCRMatch: Bool
     public let isSelected: Bool
+    public let selectedURLs: [URL]?
     public let onSelect: () -> Void
     public let onTrash: () -> Void
 
@@ -267,12 +327,14 @@ public struct FileListRowView: View {
         item: FileItem,
         isOCRMatch: Bool,
         isSelected: Bool,
+        selectedURLs: [URL]? = nil,
         onSelect: @escaping () -> Void,
         onTrash: @escaping () -> Void
     ) {
         self.item = item
         self.isOCRMatch = isOCRMatch
         self.isSelected = isSelected
+        self.selectedURLs = selectedURLs
         self.onSelect = onSelect
         self.onTrash = onTrash
     }
@@ -374,37 +436,20 @@ public struct FileListRowView: View {
         .onTapGesture(count: 2) {
             NSWorkspace.shared.open(item.url)
         }
+        .onDrag {
+            let urlsToDrag: [URL]
+            if let selected = selectedURLs, selected.contains(item.url), selected.count > 1 {
+                urlsToDrag = selected
+            } else {
+                urlsToDrag = [item.url]
+            }
+            return MultiSelectionHelper.createMultiFileItemProvider(for: item.url, selectedURLs: urlsToDrag)
+        }
         .task(id: item.url) {
             icon = NSWorkspace.shared.icon(forFile: item.url.path)
         }
-        .contextMenu {
-            Button("Open") {
-                NSWorkspace.shared.open(item.url)
-            }
-
-            Button("Reveal in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([item.url])
-            }
-
-            Button("Copy Path") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(item.url.path, forType: .string)
-            }
-
-            if let originURL = item.originURL {
-                Button("Copy Download Source URL") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(originURL.absoluteString, forType: .string)
-                }
-            }
-
-            Divider()
-
-            Button(role: .destructive) {
-                onTrash()
-            } label: {
-                Label("Move to Trash", systemImage: "trash")
-            }
-        }
+        .fileContextMenu(for: item, onTrash: { _ in
+            onTrash()
+        })
     }
 }

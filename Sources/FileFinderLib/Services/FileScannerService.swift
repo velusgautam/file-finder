@@ -58,7 +58,20 @@ public final class ScannerViewModel: ObservableObject {
 
     // Navigation, Inspector & Layout State
     @Published public var currentSection: NavigationSection = .home
-    @Published public var selectedFile: FileItem? = nil
+    @Published public var selectedFile: FileItem? = nil {
+        didSet {
+            if let file = selectedFile {
+                if !selectedFileSet.contains(file.url) {
+                    selectedFileSet = [file.url]
+                }
+            }
+            updateQuickLookIfVisible()
+        }
+    }
+    @Published public var selectedFileSet: Set<URL> = []
+    @Published public var selectedFolder: FolderItem? = nil
+    @Published public var isQuickLookVisible: Bool = false
+    @Published public var quickLookURL: URL? = nil
     @Published public var selectedDuplicateGroup: DuplicateGroup? = nil
     @Published public var isSidebarVisible: Bool = true
     @Published public var isDetailInspectorVisible: Bool = false
@@ -118,12 +131,35 @@ public final class ScannerViewModel: ObservableObject {
 
     private let scanner = FileScannerService()
     private let applicationsService = ApplicationsService.shared
+    private let cacheService = DirectoryCacheService.shared
+    private let indexService = SQLiteIndexService.shared
+    private var folderLoadTask: Task<Void, Never>?
     private var ocrTask: Task<Void, Never>?
     private var deduplicationTask: Task<Void, Never>?
 
     public init() {
         self.sidebarSections = SidebarSectionStore.shared.loadSections()
         self.sidebarLocations = SidebarLocationStore.shared.loadLocations()
+
+        self.cacheService.onInvalidation = { [weak self] invalidatedURL in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                if let current = self.currentFolderURL?.standardizedFileURL,
+                   current == invalidatedURL.standardizedFileURL || invalidatedURL.path.hasPrefix(current.path) {
+                    self.loadCurrentFolderContents(forceRefresh: true)
+                }
+            }
+        }
+
+        QuickLookManager.shared.onVisibilityChanged = { [weak self] isVis in
+            Task { @MainActor [weak self] in
+                self?.isQuickLookVisible = isVis
+                if !isVis {
+                    self?.quickLookURL = nil
+                }
+            }
+        }
+
         Task {
             await refresh()
         }
@@ -163,6 +199,11 @@ public final class ScannerViewModel: ObservableObject {
         self.shelves = categorized
         self.isLoading = false
         self.isInitialLoading = false
+
+        // Asynchronously persist scanned files in SQLite index
+        Task.detached(priority: .utility) { [all] in
+            try? await SQLiteIndexService.shared.upsert(files: all)
+        }
 
         // Launch background multi-threaded duplicate detection without blocking the UI
         startBackgroundDeduplication(files: all)
@@ -218,6 +259,9 @@ public final class ScannerViewModel: ObservableObject {
     public func recordOCRResult(url: URL, text: String) {
         self.ocrTextByFileURL[url] = text
         self.ocrProcessedCount += 1
+        Task.detached(priority: .utility) {
+            try? await SQLiteIndexService.shared.updateOCRText(text, for: url)
+        }
     }
 
     @MainActor
@@ -237,6 +281,7 @@ public final class ScannerViewModel: ObservableObject {
                     self.shelves[cat]?.removeAll { $0.url == item.url }
                 }
                 self.ocrTextByFileURL.removeValue(forKey: item.url)
+                self.selectedFileSet.remove(item.url)
                 if self.selectedFile?.url == item.url {
                     self.selectedFile = nil
                 }
@@ -249,6 +294,10 @@ public final class ScannerViewModel: ObservableObject {
                     }
                     return nil
                 }
+            }
+            self.cacheService.invalidate(for: item.url.deletingLastPathComponent())
+            Task.detached(priority: .utility) {
+                try? await SQLiteIndexService.shared.delete(url: item.url)
             }
         } catch {
             print("Failed to move file to trash: \(error)")
@@ -281,6 +330,12 @@ public final class ScannerViewModel: ObservableObject {
             try FileManager.default.trashItem(at: folder.url, resultingItemURL: nil)
             withAnimation(.easeInOut(duration: 0.25)) {
                 self.currentFolderSubfolders.removeAll { $0.url == folder.url }
+            }
+            self.cacheService.invalidate(for: folder.url)
+            self.cacheService.invalidate(for: folder.url.deletingLastPathComponent())
+            Task.detached(priority: .utility) {
+                try? await SQLiteIndexService.shared.delete(url: folder.url)
+                try? await SQLiteIndexService.shared.delete(parentPath: folder.url.path)
             }
         } catch {
             print("Failed to move folder to trash: \(error)")
@@ -456,9 +511,52 @@ public final class ScannerViewModel: ObservableObject {
     }
 
     @MainActor
-    public func loadCurrentFolderContents() {
-        guard let targetURL = currentFolderURL else { return }
-        let fm = FileManager.default
+    public func loadCurrentFolderContents(forceRefresh: Bool = false) {
+        guard let targetURL = currentFolderURL?.standardizedFileURL else { return }
+
+        // 1. Instant 0ms LRU Cache Check
+        if !forceRefresh, let cached = cacheService.get(for: targetURL) {
+            self.currentFolderSubfolders = cached.subfolders
+            self.currentFolderFiles = cached.files
+
+            // Asynchronously refresh in the background from disk / SQLite and update cache seamlessly
+            folderLoadTask?.cancel()
+            folderLoadTask = Task.detached(priority: .userInitiated) { [weak self, targetURL] in
+                let (folders, files) = Self.scanDirectory(at: targetURL)
+                if Task.isCancelled { return }
+
+                DirectoryCacheService.shared.set(subfolders: folders, files: files, for: targetURL)
+                try? await SQLiteIndexService.shared.upsert(files: files)
+
+                await MainActor.run { [weak self] in
+                    guard let self = self, self.currentFolderURL?.standardizedFileURL == targetURL else { return }
+                    if self.currentFolderSubfolders != folders {
+                        self.currentFolderSubfolders = folders
+                    }
+                    if self.currentFolderFiles != files {
+                        self.currentFolderFiles = files
+                    }
+                }
+            }
+            return
+        }
+
+        // 2. Cache miss: populate immediately and store in cache for 0ms future retrieval
+        let (folders, files) = Self.scanDirectory(at: targetURL)
+        self.currentFolderSubfolders = folders
+        self.currentFolderFiles = files
+        self.cacheService.set(subfolders: folders, files: files, for: targetURL)
+
+        // Asynchronously update SQLite index
+        folderLoadTask?.cancel()
+        folderLoadTask = Task.detached(priority: .utility) { [files] in
+            try? await SQLiteIndexService.shared.upsert(files: files)
+        }
+    }
+
+    /// Shallow directory scan helper
+    nonisolated public static func scanDirectory(at targetURL: URL) -> (subfolders: [FolderItem], files: [FileItem]) {
+        let fm = FileManager()
         guard let urls = try? fm.contentsOfDirectory(
             at: targetURL,
             includingPropertiesForKeys: [
@@ -472,9 +570,7 @@ public final class ScannerViewModel: ObservableObject {
             ],
             options: [.skipsHiddenFiles]
         ) else {
-            self.currentFolderSubfolders = []
-            self.currentFolderFiles = []
-            return
+            return ([], [])
         }
 
         var folders: [FolderItem] = []
@@ -527,8 +623,8 @@ public final class ScannerViewModel: ObservableObject {
             }
         }
 
-        self.currentFolderSubfolders = folders.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        self.currentFolderFiles = files
+        let sortedFolders = folders.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        return (sortedFolders, files)
     }
 
     // Real Metrics
@@ -930,6 +1026,155 @@ public final class ScannerViewModel: ObservableObject {
         }
 
         return groups
+    }
+
+    // MARK: - Native macOS Quick Look
+    public func toggleQuickLook() {
+        guard let file = selectedFile else {
+            closeQuickLook()
+            return
+        }
+        if isQuickLookVisible {
+            closeQuickLook()
+        } else {
+            openQuickLook(for: file.url)
+        }
+    }
+
+    public func openQuickLook(for url: URL) {
+        quickLookURL = url
+        isQuickLookVisible = true
+        QuickLookManager.shared.show(url: url)
+    }
+
+    public func closeQuickLook() {
+        quickLookURL = nil
+        isQuickLookVisible = false
+        QuickLookManager.shared.close()
+    }
+
+    public func updateQuickLookIfVisible() {
+        if isQuickLookVisible || QuickLookManager.shared.isVisible {
+            if let file = selectedFile {
+                quickLookURL = file.url
+                QuickLookManager.shared.updateSelection(file.url)
+            } else {
+                closeQuickLook()
+            }
+        }
+    }
+
+    // MARK: - Multi-File Selection
+    public func selectSingleFile(_ file: FileItem) {
+        selectedFolder = nil
+        selectedFile = file
+        selectedFileSet = [file.url]
+    }
+
+    public func toggleFileSelection(_ file: FileItem) {
+        selectedFolder = nil
+        MultiSelectionHelper.toggle(item: file.url, in: &selectedFileSet)
+        if selectedFileSet.contains(file.url) {
+            selectedFile = file
+        } else {
+            selectedFile = displayedFiles.first(where: { selectedFileSet.contains($0.url) })
+        }
+    }
+
+    public func selectFileRange(to file: FileItem) {
+        selectedFolder = nil
+        let allItemURLs = displayedFiles.map { $0.url }
+        let anchorURL = selectedFile?.url ?? file.url
+        let rangeURLs = MultiSelectionHelper.rangeSelection(from: anchorURL, to: file.url, in: allItemURLs)
+        selectedFileSet.formUnion(rangeURLs)
+        selectedFile = file
+    }
+
+    public func selectSingleFolder(_ folder: FolderItem) {
+        selectedFile = nil
+        selectedFileSet.removeAll()
+        selectedFolder = folder
+        closeQuickLook()
+    }
+
+    public func clearSelection() {
+        selectedFile = nil
+        selectedFileSet.removeAll()
+        selectedFolder = nil
+        closeQuickLook()
+    }
+
+    // MARK: - Keyboard Navigation (Finder-Style)
+    public func openCurrentSelection() {
+        if let folder = selectedFolder {
+            navigateToFolder(folder.url)
+        } else if let file = selectedFile {
+            NSWorkspace.shared.open(file.url)
+        }
+    }
+
+    public func navigateSelection(direction: NavigationDirection, columnsCount: Int? = nil) {
+        let cols: Int
+        if layoutMode == .list {
+            cols = 1
+        } else {
+            cols = columnsCount ?? max(1, Int(800 / (gridIconSize + 18)))
+        }
+
+        let folders = currentFolderSubfolders
+        let files = displayedFiles
+
+        if !folders.isEmpty || !files.isEmpty {
+            navigateFolderAndFiles(direction: direction, columns: cols, folders: folders, files: files)
+        } else if !displayedFiles.isEmpty {
+            navigateOnlyFiles(direction: direction, columns: cols, files: displayedFiles)
+        }
+    }
+
+    private func navigateOnlyFiles(direction: NavigationDirection, columns: Int, files: [FileItem]) {
+        let currentIndex = files.firstIndex(where: { $0.url == selectedFile?.url })
+        guard let newIndex = SelectionNavigator.navigate(
+            from: currentIndex,
+            direction: direction,
+            totalCount: files.count,
+            columns: columns
+        ) else { return }
+
+        let targetFile = files[newIndex]
+        selectSingleFile(targetFile)
+    }
+
+    private func navigateFolderAndFiles(
+        direction: NavigationDirection,
+        columns: Int,
+        folders: [FolderItem],
+        files: [FileItem]
+    ) {
+        let folderCount = folders.count
+        let fileCount = files.count
+        let totalCount = folderCount + fileCount
+        guard totalCount > 0 else { return }
+
+        var currentIndex: Int? = nil
+        if let folder = selectedFolder, let idx = folders.firstIndex(where: { $0.url == folder.url }) {
+            currentIndex = idx
+        } else if let file = selectedFile, let idx = files.firstIndex(where: { $0.url == file.url }) {
+            currentIndex = folderCount + idx
+        }
+
+        guard let newIndex = SelectionNavigator.navigate(
+            from: currentIndex,
+            direction: direction,
+            totalCount: totalCount,
+            columns: columns
+        ) else { return }
+
+        if newIndex < folderCount {
+            selectSingleFolder(folders[newIndex])
+        } else {
+            let fileIndex = newIndex - folderCount
+            selectSingleFile(files[fileIndex])
+        }
     }
 }
 

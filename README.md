@@ -70,6 +70,34 @@ Or download the prebuilt `.dmg` disk image installer from the [latest release](h
 
 ## Features
 
+### ⚡ Snappy SQLite Database & 0ms LRU Cache
+- **Embedded SQLite Index** (`~/Library/Application Support/FileFinder/index.db`) persists file attributes, categories, SHA256 checksums, and OCR text with B-Tree indexes on `parentPath`.
+- **In-Memory LRU Directory Cache** delivers **0ms instantaneous folder clicks** when navigating folders, locations, and breadcrumbs.
+- **FSEvents Integration** watches cached directories and invalidates entries live when files change on disk.
+
+### 👁️ Native Quick Look (Space) & Arrow Key Navigation
+- Press **`Space`** on any file to toggle real native macOS Quick Look.
+- **Arrow Keys** (`Left`, `Right`, `Up`, `Down`) smoothly move selection across Grid cards and List rows, immediately updating the active Quick Look preview without closing or flickering.
+- Press **`Return`** to navigate into folders or launch files.
+
+### 🪟 Global Floating Quick Search (`⇧⌘Space`)
+- Press **`⇧⌘Space`** anywhere on macOS to summon a floating, centered frosted-glass HUD search panel over any active window.
+- Instant search with arrow key selection, `Space` for Quick Look preview, `Return` to open, `⌘Return` to reveal in File Finder, and `Esc` to dismiss.
+
+### ⚙️ Settings Modal (`⌘,`) & Automatic Clean Up Rules
+- Press **`⌘,`** to open the modal Settings hub.
+- **Clean Up Rules**:
+  - *Rule 1*: Move installers (`.dmg`, `.pkg`, `.iso`) in Downloads older than 30 days to Trash with one-click "Run Now" execution.
+  - *Rule 2*: Automatically organize screenshots into monthly subfolders (`Screenshots/YYYY-MM/`).
+- **Saved Searches**: Build, manage, and re-execute custom queries ("pdfs from last week", "screenshots > 5 MB").
+
+### 📦 Multi-File Selection & Drag & Drop
+- `⌘-Click` to toggle multiple individual files or `⇧-Click` to select continuous ranges.
+- Drag multiple files simultaneously (`.onDrag`) into Mail, Slack, Figma, or Finder.
+
+### 🖱️ Comprehensive Context Menu
+- Right-click any file: Quick Look (`Space`), Open (`Return`), Open With... submenu, Show in Finder, Copy File (`⌘C`), Copy Path (`⌥⌘C`), Copy Text from Image via OCR (`⇧⌘C`), and Move to Trash (`⌘⌫`).
+
 ### 🗂️ Smart Shelves & Auto-Categorization
 Never search through endless directory trees again. Files are automatically grouped into natural categories:
 - **Recent Downloads**: Files acquired in the last 30 days with source application and domain attribution.
@@ -202,12 +230,23 @@ swift run
 
 | Shortcut | Action |
 | :--- | :--- |
-| `⌘ \` | Toggle Sidebar visibility |
+| `Space` | Toggle Quick Look preview |
+| `↑` `↓` `←` `→` | Navigate files and folders |
+| `Return` | Open file or navigate into folder |
+| `⇧⌘ Space` | Summon Global Quick Search HUD |
+| `⌘ F` | Focus In-App Search Bar |
+| `⌘ ,` | Open Settings & Clean Up Rules |
 | `⌘ 1` | Switch to Grid View |
 | `⌘ 2` | Switch to List View |
-| `⌘ F` | Focus Natural Language Search Bar |
+| `⌘ +` / `⌘ =` | Enlarge preview cards |
+| `⌘ -` | Shrink preview cards |
+| `⌘ I` | Toggle Right Detail Inspector |
+| `⇧⌘ J` | Jump to Downloaded From overview |
+| `⇧⌘ D` | Jump to Duplicate Detective |
+| `⇧⌘ K` | Jump to Clean Up |
+| `⌘ \` | Toggle Sidebar visibility |
 | `⌘ R` | Refresh scan / reload directory |
-| `Esc` | Clear active search filters |
+| `Esc` | Close Quick Search / dismiss preview |
 
 ---
 

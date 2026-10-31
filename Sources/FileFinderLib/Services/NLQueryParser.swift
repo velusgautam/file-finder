@@ -173,12 +173,35 @@ public enum NLQueryParser {
         }
 
         // 4. File Types & Categories
+        // Direct type:xxx or ext:xxx syntax
+        if let match = text.range(of: #"\b(?:type|ext):([a-zA-Z0-9]+)\b"#, options: [.regularExpression, .caseInsensitive]) {
+            let matchedStr = String(text[match])
+            let ext = matchedStr.components(separatedBy: ":").last?.lowercased() ?? ""
+            if !ext.isEmpty {
+                filter.targetExtension = ext
+                chips.append(FilterChip(title: ext.uppercased(), iconSystemName: "doc.text", type: .fileExtension(ext)))
+                text.removeSubrange(match)
+            }
+        }
+
         // Screenshots
         if let match = text.range(of: #"\bscreenshots?\b"#, options: [.regularExpression, .caseInsensitive]) {
             filter.category = .images
             filter.onlyScreenshots = true
             chips.append(FilterChip(title: "Screenshots", iconSystemName: "camera.viewfinder", type: .screenshot))
             text.removeSubrange(match)
+        }
+
+        // Type / extension prefix ("type:pdf", "ext:png")
+        let typeRegex = #"\b(?:type|ext|extension):(\w+)\b"#
+        if let match = text.range(of: typeRegex, options: [.regularExpression, .caseInsensitive]) {
+            let matchedStr = String(text[match]).lowercased()
+            let ext = matchedStr.components(separatedBy: ":").last ?? ""
+            if !ext.isEmpty {
+                filter.targetExtension = ext
+                chips.append(FilterChip(title: ext.uppercased(), iconSystemName: "doc.text", type: .fileExtension(ext)))
+                text.removeSubrange(match)
+            }
         }
 
         // PDFs
