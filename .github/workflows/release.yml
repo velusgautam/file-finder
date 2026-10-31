@@ -3,10 +3,10 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Release version tag (e.g. v1.2.0)'
-        required: true
-        default: 'v1.2.0'
+      version_override:
+        description: 'Optional version override (e.g. 2.0.0). Leave blank to auto-increment from latest git tag.'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -16,8 +16,47 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  version:
+    name: Determine Next Release Version
+    runs-on: macos-15
+    environment: release
+    outputs:
+      version: ${{ steps.calc.outputs.version }}
+      tag: ${{ steps.calc.outputs.tag }}
+    steps:
+      - name: Checkout repository with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate Next Version
+        id: calc
+        env:
+          MANUAL_OVERRIDE: ${{ github.event.inputs.version_override }}
+        run: |
+          git fetch --tags --force
+          if [ -n "$MANUAL_OVERRIDE" ]; then
+            ver="${MANUAL_OVERRIDE#v}"
+            echo "Using manual version override: $ver"
+          else
+            latest="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)"
+            echo "Latest tag found: ${latest:-none}"
+            if [ -z "$latest" ]; then
+              ver="1.2.0"
+            else
+              clean_ver="${latest#v}"
+              IFS=. read -r major minor patch <<< "$clean_ver"
+              ver="$major.$((minor + 1)).0"
+            fi
+            echo "Auto-incremented version to: $ver"
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=v$ver" >> "$GITHUB_OUTPUT"
+          echo "::notice::Next release version: v$ver (tag: v$ver)"
+
   build-and-release:
     name: Build, Sign, Notarize & Release macOS DMG
+    needs: version
     runs-on: macos-15
     environment: release
 
@@ -71,11 +110,13 @@ jobs:
 
       - name: Build File Finder Application
         env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
           CODESIGN_IDENTITY: ${{ steps.keychain.outputs.identity }}
         run: ./scripts/build_app.sh
 
       - name: Package macOS DMG Installer
         env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
           CODESIGN_IDENTITY: ${{ steps.keychain.outputs.identity }}
         run: ./scripts/create_dmg.sh
 
@@ -118,15 +159,16 @@ jobs:
           shasum -a 256 *.dmg > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release and Auto-Tag
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
-          TAG="${{ github.event.inputs.tag || 'v1.2.0' }}"
-          echo "Creating or updating GitHub Release for $TAG"
+          echo "Creating Release and Auto-tagging $TAG..."
           gh release create "$TAG" \
             dist/File-Finder-*.dmg \
             dist/File-Finder.dmg \
             dist/SHA256SUMS.txt \
+            --target main \
             --title "File Finder $TAG" \
             --generate-notes
