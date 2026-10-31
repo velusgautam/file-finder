@@ -1,6 +1,7 @@
 import Foundation
 
 public enum SortOption: String, CaseIterable, Identifiable, Sendable {
+    case relevance    = "Relevance"
     case dateModified = "Date Modified"
     case dateCreated  = "Date Created"
     case name         = "Name"
@@ -10,6 +11,7 @@ public enum SortOption: String, CaseIterable, Identifiable, Sendable {
 
     public var iconName: String {
         switch self {
+        case .relevance:    return "sparkles"
         case .dateModified: return "calendar"
         case .dateCreated:  return "clock"
         case .name:         return "textformat"

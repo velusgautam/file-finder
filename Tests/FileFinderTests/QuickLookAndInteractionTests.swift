@@ -210,4 +210,65 @@ struct QuickLookAndInteractionTests {
         #expect(vm.isQuickLookVisible == false)
         #expect(vm.quickLookURL == nil)
     }
+
+    // MARK: - 5. Escape Key Hierarchical Actions & Fullscreen Protection
+
+    @Test("Escape key closes search when search query is active and returns nil")
+    @MainActor
+    func testEscapeClosesSearchWhenActive() {
+        let vm = ScannerViewModel()
+        vm.searchQuery = "financial report"
+        #expect(!vm.searchQuery.isEmpty)
+
+        let result = KeyboardNavigationHandler.shared.handleEscapeKey(vm: vm)
+        #expect(result == nil) // Consumed
+        #expect(vm.searchQuery.isEmpty)
+    }
+
+    @Test("Escape key deselects multiple files when multi-selection is active")
+    @MainActor
+    func testEscapeDeselectsMultipleFiles() {
+        let vm = ScannerViewModel()
+        let fileA = makeMockFile(name: "fileA")
+        let fileB = makeMockFile(name: "fileB")
+
+        vm.toggleFileSelection(fileA)
+        vm.toggleFileSelection(fileB)
+        #expect(vm.selectedFileSet.count == 2)
+
+        let result = KeyboardNavigationHandler.shared.handleEscapeKey(vm: vm)
+        #expect(result == nil) // Consumed
+        #expect(vm.selectedFileSet.isEmpty)
+        #expect(vm.selectedFile == nil)
+    }
+
+    @Test("Escape key closes right detail sidebar when open and file was clicked")
+    @MainActor
+    func testEscapeClosesRightDetailSidebar() {
+        let vm = ScannerViewModel()
+        let file = makeMockFile(name: "document")
+
+        vm.selectSingleFile(file)
+        vm.isDetailInspectorVisible = true
+        #expect(vm.isDetailInspectorVisible == true)
+
+        let result = KeyboardNavigationHandler.shared.handleEscapeKey(vm: vm)
+        #expect(result == nil) // Consumed
+        #expect(vm.isDetailInspectorVisible == false)
+        #expect(vm.selectedFile == nil)
+    }
+
+    @Test("Escape key returns nil unconditionally when idle to prevent exiting macOS fullscreen/maximize mode")
+    @MainActor
+    func testEscapeConsumedUnconditionallyToPreventExitingFullscreen() {
+        let vm = ScannerViewModel()
+        // Ensure everything is idle
+        vm.searchQuery = ""
+        vm.clearSelection()
+        vm.isDetailInspectorVisible = false
+
+        let result = KeyboardNavigationHandler.shared.handleEscapeKey(vm: vm)
+        // Must return nil so macOS AppKit window never receives Escape and never exits fullscreen
+        #expect(result == nil)
+    }
 }

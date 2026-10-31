@@ -46,7 +46,11 @@ public struct ScanProgress: Sendable {
 @MainActor
 public final class ScannerViewModel: ObservableObject {
     @Published public private(set) var shelves: [ShelfCategory: [FileItem]] = [:]
-    @Published public private(set) var allFiles: [FileItem] = []
+    @Published public private(set) var allFiles: [FileItem] = [] {
+        didSet {
+            dataVersion &+= 1
+        }
+    }
     @Published public private(set) var isLoading: Bool = false
     @Published public private(set) var isInitialLoading: Bool = true
 
@@ -85,13 +89,28 @@ public final class ScannerViewModel: ObservableObject {
     @Published public var selectedSortOrder: SortOrder = .descending
     @Published public var selectedSizeFilter: SizeFilter = .all
     @Published public var selectedDateFilter: DateFilter = .all
+    @Published public var showFileExtensions: Bool = UserDefaults.standard.bool(forKey: "FileFinder_ShowFileExtensions") {
+        didSet {
+            UserDefaults.standard.set(showFileExtensions, forKey: "FileFinder_ShowFileExtensions")
+        }
+    }
+
+    public func toggleFileExtensions() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showFileExtensions.toggle()
+        }
+    }
 
     // Location Folder Browsing State
     @Published public private(set) var currentLocationRootURL: URL? = nil
     @Published public private(set) var currentLocationName: String = ""
     @Published public private(set) var currentFolderURL: URL? = nil
     @Published public private(set) var currentFolderSubfolders: [FolderItem] = []
-    @Published public private(set) var currentFolderFiles: [FileItem] = []
+    @Published public private(set) var currentFolderFiles: [FileItem] = [] {
+        didSet {
+            dataVersion &+= 1
+        }
+    }
 
     // Sidebar Order & Reordering State
     @Published public var sidebarSections: [SidebarSectionKind] = []
@@ -113,6 +132,26 @@ public final class ScannerViewModel: ObservableObject {
     // Duplicates
     @Published public private(set) var duplicateGroups: [DuplicateGroup] = []
     @Published public private(set) var isDeduplicating: Bool = false
+
+    // Cache for displayedItems to avoid heavy O(N) recomputations on repeated SwiftUI view evaluations
+    private struct DisplayCacheKey: Equatable {
+        let section: NavigationSection
+        let categoryFilter: ShelfCategory?
+        let originFilter: DownloadOrigin?
+        let sizeFilter: SizeFilter
+        let dateFilter: DateFilter
+        let activeFilter: SearchFilter
+        let sortOption: SortOption
+        let sortOrder: SortOrder
+        let allFilesCount: Int
+        let currentFolderFilesCount: Int
+        let ocrCount: Int
+        let dataVersion: Int
+    }
+
+    private var cachedDisplayedItems: [DisplayItem] = []
+    private var lastDisplayCacheKey: DisplayCacheKey?
+    private var dataVersion: Int = 0
 
     // Search & NLP
     @Published public var searchQuery: String = "" {
@@ -721,6 +760,14 @@ public final class ScannerViewModel: ObservableObject {
         let result = NLQueryParser.parse(searchQuery)
         self.activeFilter = result.filter
         self.activeChips = result.chips
+
+        if !result.filter.isEmpty {
+            if selectedSortOption == .dateModified {
+                selectedSortOption = .relevance
+            }
+        } else if selectedSortOption == .relevance {
+            selectedSortOption = .dateModified
+        }
     }
 
     public func removeChip(_ chip: FilterChip) {
@@ -830,6 +877,9 @@ public final class ScannerViewModel: ObservableObject {
         selectedSizeFilter = .all
         selectedDateFilter = .all
         searchQuery = ""
+        if selectedSortOption == .relevance {
+            selectedSortOption = .dateModified
+        }
         if case .downloadedFrom = currentSection {
             currentSection = .home
         }
@@ -857,6 +907,25 @@ public final class ScannerViewModel: ObservableObject {
 
     // Display items according to active navigation, filters, and sorting
     public var displayedItems: [DisplayItem] {
+        let currentKey = DisplayCacheKey(
+            section: currentSection,
+            categoryFilter: selectedCategoryFilter,
+            originFilter: selectedOriginFilter,
+            sizeFilter: selectedSizeFilter,
+            dateFilter: selectedDateFilter,
+            activeFilter: activeFilter,
+            sortOption: selectedSortOption,
+            sortOrder: selectedSortOrder,
+            allFilesCount: allFiles.count,
+            currentFolderFilesCount: currentFolderFiles.count,
+            ocrCount: ocrTextByFileURL.count,
+            dataVersion: dataVersion
+        )
+
+        if let last = lastDisplayCacheKey, last == currentKey {
+            return cachedDisplayedItems
+        }
+
         var candidateFiles: [FileItem] = []
 
         switch currentSection {
@@ -918,25 +987,46 @@ public final class ScannerViewModel: ObservableObject {
             }
         }
 
-        // Apply Sorting
-        matchedItems.sort { (d1: DisplayItem, d2: DisplayItem) -> Bool in
-            let f1 = d1.item
-            let f2 = d2.item
-            let isAscending = (selectedSortOrder == .ascending)
+        // Apply Sorting with O(N) pre-computed relevance scores
+        let isAscending = (selectedSortOrder == .ascending)
+        if selectedSortOption == .relevance {
+            let q = activeFilter.keywords.joined(separator: " ")
+            var scoreMap: [URL: Double] = [:]
+            scoreMap.reserveCapacity(matchedItems.count)
+            for d in matchedItems {
+                let ocr = ocrTextByFileURL[d.item.url]
+                scoreMap[d.item.url] = SearchRelevanceScorer.score(file: d.item, query: q, ocrText: ocr, parsedFilter: activeFilter)
+            }
 
-            switch selectedSortOption {
-            case .dateModified:
-                return isAscending ? f1.modificationDate < f2.modificationDate : f1.modificationDate > f2.modificationDate
-            case .dateCreated:
-                return isAscending ? f1.creationDate < f2.creationDate : f1.creationDate > f2.creationDate
-            case .name:
-                let cmp = f1.name.localizedCaseInsensitiveCompare(f2.name)
-                return isAscending ? (cmp == .orderedAscending) : (cmp == .orderedDescending)
-            case .size:
-                return isAscending ? f1.fileSize < f2.fileSize : f1.fileSize > f2.fileSize
+            matchedItems.sort { (d1: DisplayItem, d2: DisplayItem) -> Bool in
+                let s1 = scoreMap[d1.item.url] ?? 0.0
+                let s2 = scoreMap[d2.item.url] ?? 0.0
+                if abs(s1 - s2) > 0.001 {
+                    return isAscending ? s1 < s2 : s1 > s2
+                }
+                return isAscending ? d1.item.modificationDate < d2.item.modificationDate : d1.item.modificationDate > d2.item.modificationDate
+            }
+        } else {
+            matchedItems.sort { (d1: DisplayItem, d2: DisplayItem) -> Bool in
+                let f1 = d1.item
+                let f2 = d2.item
+
+                switch selectedSortOption {
+                case .dateModified, .relevance:
+                    return isAscending ? f1.modificationDate < f2.modificationDate : f1.modificationDate > f2.modificationDate
+                case .dateCreated:
+                    return isAscending ? f1.creationDate < f2.creationDate : f1.creationDate > f2.creationDate
+                case .name:
+                    let cmp = f1.name.localizedCaseInsensitiveCompare(f2.name)
+                    return isAscending ? (cmp == .orderedAscending) : (cmp == .orderedDescending)
+                case .size:
+                    return isAscending ? f1.fileSize < f2.fileSize : f1.fileSize > f2.fileSize
+                }
             }
         }
 
+        lastDisplayCacheKey = currentKey
+        cachedDisplayedItems = matchedItems
         return matchedItems
     }
 
@@ -976,7 +1066,7 @@ public final class ScannerViewModel: ObservableObject {
                 return isAscending ? (cmp == .orderedAscending) : (cmp == .orderedDescending)
             case .size:
                 return isAscending ? a1.fileSize < a2.fileSize : a1.fileSize > a2.fileSize
-            case .dateModified, .dateCreated:
+            case .dateModified, .dateCreated, .relevance:
                 return isAscending ? a1.modificationDate < a2.modificationDate : a1.modificationDate > a2.modificationDate
             }
         }
@@ -1018,7 +1108,7 @@ public final class ScannerViewModel: ObservableObject {
                 let n2 = g2.original?.name ?? ""
                 let cmp = n1.localizedCaseInsensitiveCompare(n2)
                 return isAscending ? (cmp == .orderedAscending) : (cmp == .orderedDescending)
-            case .dateModified, .dateCreated:
+            case .dateModified, .dateCreated, .relevance:
                 let d1 = g1.original?.modificationDate ?? Date.distantPast
                 let d2 = g2.original?.modificationDate ?? Date.distantPast
                 return isAscending ? d1 < d2 : d1 > d2
@@ -1119,6 +1209,13 @@ public final class ScannerViewModel: ObservableObject {
         selectedFileSet.removeAll()
         selectedFolder = nil
         closeQuickLook()
+    }
+
+    public func closeDetailInspector() {
+        isDetailInspectorVisible = false
+        selectedDuplicateGroup = nil
+        selectedFile = nil
+        selectedFileSet.removeAll()
     }
 
     // MARK: - Keyboard Navigation (Finder-Style)

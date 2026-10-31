@@ -6,6 +6,7 @@ public struct FileCardView: View {
     public let isOCRMatch: Bool
     public let isSelected: Bool
     public let cardWidth: CGFloat
+    public let showExtension: Bool
     public let selectedURLs: [URL]?
     public let onSelect: (() -> Void)?
     public let onTrash: ((FileItem) -> Void)?
@@ -17,6 +18,7 @@ public struct FileCardView: View {
         isOCRMatch: Bool = false,
         isSelected: Bool = false,
         cardWidth: CGFloat = 190,
+        showExtension: Bool = false,
         selectedURLs: [URL]? = nil,
         onSelect: (() -> Void)? = nil,
         onTrash: ((FileItem) -> Void)? = nil
@@ -25,6 +27,7 @@ public struct FileCardView: View {
         self.isOCRMatch = isOCRMatch
         self.isSelected = isSelected
         self.cardWidth = cardWidth
+        self.showExtension = showExtension
         self.selectedURLs = selectedURLs
         self.onSelect = onSelect
         self.onTrash = onTrash
@@ -102,7 +105,7 @@ public struct FileCardView: View {
 
             // File Metadata
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.name)
+                Text(item.displayName(showExtension: showExtension))
                     .font(.system(size: cardWidth < 160 ? 11 : 12.5, weight: isSelected ? .semibold : .medium, design: .rounded))
                     .foregroundColor(Color(nsColor: .labelColor))
                     .lineLimit(1)

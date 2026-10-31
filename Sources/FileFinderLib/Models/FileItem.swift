@@ -42,6 +42,16 @@ public struct FileItem: Identifiable, Hashable, Sendable {
         return formatter.localizedString(for: modificationDate, relativeTo: Date())
     }
 
+    /// Full file name on disk including path extension (e.g., "resume.pdf")
+    public var fullName: String {
+        url.lastPathComponent
+    }
+
+    /// Returns either the full file name with extension or the base name according to user setting
+    public func displayName(showExtension: Bool) -> String {
+        showExtension ? fullName : name
+    }
+
     public func hash(into hasher: inout Hasher) {
         hasher.combine(url)
         hasher.combine(modificationDate)

@@ -135,48 +135,14 @@ public struct MainWindowView: View {
                 .help("Show Sidebar")
             }
 
-            // Search Pill
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
-                    .font(.system(size: 13))
-
-                TextField("Search, or try \"pdfs from last week\"...", text: $viewModel.searchQuery)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13, design: .rounded))
-                    .focused($isSearchFocused)
-
-                if !viewModel.searchQuery.isEmpty {
-                    Button {
-                        viewModel.searchQuery = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .pointerOnHover()
+            // Search Pill (Decoupled, zero-latency typing with 160ms lazy search debounce)
+            MainHeaderSearchBar(
+                searchQuery: $viewModel.searchQuery,
+                isSearchFocused: $isSearchFocused,
+                onResetFilters: {
+                    viewModel.resetFilters()
                 }
-
-                // Keyboard Shortcut Keycap "⌘ F"
-                HStack(spacing: 3) {
-                    Text("⌘")
-                        .font(.system(size: 10, weight: .bold))
-                    Text("F")
-                        .font(.system(size: 10, weight: .bold))
-                }
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(ScandinavianTheme.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-                .overlay(RoundedRectangle(cornerRadius: 4).stroke(ScandinavianTheme.hairlineBorder, lineWidth: 0.8))
-                .foregroundColor(.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .background(ScandinavianTheme.searchBarBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(ScandinavianTheme.hairlineBorder, lineWidth: 1))
-            .frame(maxWidth: 420)
+            )
 
             Spacer()
 
@@ -288,6 +254,7 @@ public struct MainWindowView: View {
                     viewModel.isSidebarVisible.toggle()
                 }
             }.keyboardShortcut("\\", modifiers: .command)
+            Button("") { viewModel.toggleFileExtensions() }.keyboardShortcut(".", modifiers: .command)
             Button("") { isSettingsPresented = true }.keyboardShortcut(",", modifiers: .command)
             Button("") { QuickSearchPanelController.shared.toggle(with: viewModel) }.keyboardShortcut(.space, modifiers: [.command, .shift])
         }
@@ -362,6 +329,7 @@ public struct MainWindowView: View {
                                         isOCRMatch: item.isOCRMatch,
                                         isSelected: isSelected,
                                         cardWidth: viewModel.gridIconSize,
+                                        showExtension: viewModel.showFileExtensions,
                                         selectedURLs: Array(viewModel.selectedFileSet),
                                         onSelect: {
                                             let wasVisible = viewModel.isDetailInspectorVisible
@@ -457,6 +425,7 @@ public struct MainWindowView: View {
                                         isOCRMatch: item.isOCRMatch,
                                         isSelected: isSelected,
                                         cardWidth: viewModel.gridIconSize,
+                                        showExtension: viewModel.showFileExtensions,
                                         selectedURLs: Array(viewModel.selectedFileSet),
                                         onSelect: {
                                             let wasVisible = viewModel.isDetailInspectorVisible
@@ -517,6 +486,99 @@ public struct MainWindowView: View {
                         }
                     )
                 }
+            }
+        }
+    }
+}
+
+/// Decoupled, zero-latency search bar for the top navigation header.
+/// Typing is 100% fluid and immediate on `@State private var localText`, while updating the heavy
+/// search queries and view hierarchy updates lazily with a 160ms debounce.
+struct MainHeaderSearchBar: View {
+    @Binding var searchQuery: String
+    @FocusState.Binding var isSearchFocused: Bool
+    var onResetFilters: () -> Void
+
+    @State private var localText: String = ""
+    @State private var debounceTask: Task<Void, Never>?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(.secondary)
+                .font(.system(size: 13))
+
+            TextField("Search, or try \"pdfs from last week\"...", text: $localText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, design: .rounded))
+                .focused($isSearchFocused)
+                .onSubmit {
+                    debounceTask?.cancel()
+                    searchQuery = localText
+                }
+                .onExitCommand {
+                    debounceTask?.cancel()
+                    localText = ""
+                    searchQuery = ""
+                    onResetFilters()
+                    isSearchFocused = false
+                }
+                .onChange(of: localText) { _, newText in
+                    debounceTask?.cancel()
+                    let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty {
+                        // Immediate zero-delay reset when cleared
+                        searchQuery = ""
+                    } else {
+                        // Non-blocking lazy debouncing: 160ms so typing is never restricted or blocked
+                        debounceTask = Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 160_000_000)
+                            guard !Task.isCancelled else { return }
+                            searchQuery = newText
+                        }
+                    }
+                }
+
+            if !localText.isEmpty {
+                Button {
+                    debounceTask?.cancel()
+                    localText = ""
+                    searchQuery = ""
+                    onResetFilters()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .pointerOnHover()
+            }
+
+            // Keyboard Shortcut Keycap "⌘ F"
+            HStack(spacing: 3) {
+                Text("⌘")
+                    .font(.system(size: 10, weight: .bold))
+                Text("F")
+                    .font(.system(size: 10, weight: .bold))
+            }
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(ScandinavianTheme.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(ScandinavianTheme.hairlineBorder, lineWidth: 0.8))
+            .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(ScandinavianTheme.searchBarBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(ScandinavianTheme.hairlineBorder, lineWidth: 1))
+        .frame(maxWidth: 420)
+        .onAppear {
+            localText = searchQuery
+        }
+        .onChange(of: searchQuery) { _, newQuery in
+            if localText != newQuery {
+                localText = newQuery
             }
         }
     }

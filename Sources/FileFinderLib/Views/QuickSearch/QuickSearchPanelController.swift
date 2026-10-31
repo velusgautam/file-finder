@@ -9,18 +9,22 @@ public final class QuickSearchState: ObservableObject, @unchecked Sendable {
     @Published public var query: String = ""
     @Published public var selectedIndex: Int = 0
     @Published public var results: [FileItem] = []
+    private var searchTask: Task<Void, Never>?
 
     public init() {}
 
     /// Resets the search state to a completely fresh, empty list
     public func reset() {
+        searchTask?.cancel()
         self.query = ""
         self.selectedIndex = 0
         self.results = []
     }
 
-    /// Reactive live update: filters matching files as the user types
+    /// Reactive lazy update: filters matching files with debouncing and off-main-thread scoring
     public func updateSearch(query newQuery: String, viewModel: ScannerViewModel?) {
+        searchTask?.cancel()
+
         let trimmed = newQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             self.results = []
@@ -28,44 +32,68 @@ public final class QuickSearchState: ObservableObject, @unchecked Sendable {
             return
         }
 
-        var matchedMap: [URL: FileItem] = [:]
-        let lowerQuery = trimmed.lowercased()
+        let allFiles = viewModel?.allFiles ?? []
+        let ocrMap = viewModel?.ocrTextByFileURL ?? [:]
 
-        // 1. Fast in-memory matching against loaded files
-        if let all = viewModel?.allFiles {
+        searchTask = Task.detached(priority: .userInitiated) { [weak self, trimmed, allFiles, ocrMap] in
+            // 70ms debounce to allow fluid typing without blocking the main thread
+            try? await Task.sleep(nanoseconds: 70_000_000)
+            if Task.isCancelled { return }
+
             let parsed = NLQueryParser.parse(trimmed)
-            for file in all {
-                let nameLower = file.name.lowercased()
-                let extLower = file.fileExtension.lowercased()
+            if Task.isCancelled { return }
 
-                // Direct substring matching on filename or extension
-                if nameLower.contains(lowerQuery) || extLower.contains(lowerQuery) {
-                    matchedMap[file.url] = file
-                    continue
-                }
+            var candidateScores: [URL: (file: FileItem, score: Double)] = [:]
 
-                // Natural language & keyword filter matching
-                let (matches, _) = parsed.filter.matchEvaluation(for: file, ocrText: viewModel?.ocrTextByFileURL[file.url])
-                if matches {
-                    matchedMap[file.url] = file
+            // 1. Fast in-memory matching with precomputed relevance score
+            for file in allFiles {
+                if Task.isCancelled { return }
+                let ocr = ocrMap[file.url]
+                let score = SearchRelevanceScorer.score(file: file, query: trimmed, ocrText: ocr, parsedFilter: parsed.filter)
+                if score > 0 {
+                    candidateScores[file.url] = (file, score)
                 }
             }
-        }
 
-        // 2. Persistent SQLite index search fallback
-        let sqliteResults = SQLiteIndexService.shared.searchFilesSync(matching: trimmed, limit: 50)
-        for file in sqliteResults {
-            if matchedMap[file.url] == nil {
-                matchedMap[file.url] = file
+            // 2. Persistent SQLite index fallback
+            if !Task.isCancelled {
+                let sqliteResults = SQLiteIndexService.shared.searchFilesSync(matching: trimmed, limit: 60)
+                for file in sqliteResults {
+                    if Task.isCancelled { return }
+                    let ocr = ocrMap[file.url]
+                    let score = SearchRelevanceScorer.score(file: file, query: trimmed, ocrText: ocr, parsedFilter: parsed.filter)
+                    if score > 0 {
+                        if let existing = candidateScores[file.url] {
+                            if score > existing.score {
+                                candidateScores[file.url] = (file, score)
+                            }
+                        } else {
+                            candidateScores[file.url] = (file, score)
+                        }
+                    }
+                }
             }
-        }
 
-        // Sort by most recent modification date
-        let sorted = matchedMap.values.sorted { $0.modificationDate > $1.modificationDate }
-        self.results = Array(sorted.prefix(40))
+            if Task.isCancelled { return }
 
-        if self.selectedIndex >= self.results.count {
-            self.selectedIndex = max(0, self.results.count - 1)
+            // 3. Sort by precomputed score
+            let sorted = candidateScores.values.sorted {
+                if abs($0.score - $1.score) > 0.001 {
+                    return $0.score > $1.score
+                }
+                return $0.file.modificationDate > $1.file.modificationDate
+            }
+            let finalResults = Array(sorted.prefix(40).map(\.file))
+
+            if Task.isCancelled { return }
+
+            await MainActor.run { [weak self] in
+                guard let self = self, !Task.isCancelled else { return }
+                self.results = finalResults
+                if self.selectedIndex >= self.results.count {
+                    self.selectedIndex = max(0, self.results.count - 1)
+                }
+            }
         }
     }
 }
@@ -260,6 +288,7 @@ public struct QuickSearchView: View {
                                 QuickSearchResultRow(
                                     item: item,
                                     isSelected: index == state.selectedIndex,
+                                    showExtension: viewModel?.showFileExtensions ?? false,
                                     onSelect: {
                                         state.selectedIndex = index
                                     },
@@ -270,14 +299,17 @@ public struct QuickSearchView: View {
                                         QuickLookManager.shared.show(url: item.url)
                                     }
                                 )
-                                .id(index)
+                                .id(item.id)
                             }
                         }
+                        .id(state.query)
                         .padding(.vertical, 6)
                         .padding(.horizontal, 8)
                     }
                     .onChange(of: state.selectedIndex) { _, newIndex in
-                        proxy.scrollTo(newIndex, anchor: .center)
+                        if newIndex >= 0 && newIndex < state.results.count {
+                            proxy.scrollTo(state.results[newIndex].id, anchor: .center)
+                        }
                     }
                 }
             }
@@ -382,6 +414,7 @@ public struct QuickSearchView: View {
 private struct QuickSearchResultRow: View {
     let item: FileItem
     let isSelected: Bool
+    var showExtension: Bool = false
     let onSelect: () -> Void
     let onOpen: () -> Void
     let onPreview: () -> Void
@@ -414,7 +447,7 @@ private struct QuickSearchResultRow: View {
             // Name & Path
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(item.name)
+                    Text(item.displayName(showExtension: showExtension))
                         .font(.system(size: 13, weight: isSelected ? .semibold : .medium, design: .rounded))
                         .foregroundColor(Color(nsColor: .labelColor))
                         .lineLimit(1)

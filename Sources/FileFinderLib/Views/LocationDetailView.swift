@@ -130,6 +130,7 @@ public struct LocationDetailView: View {
                                                     isOCRMatch: item.isOCRMatch,
                                                     isSelected: isSelected,
                                                     cardWidth: viewModel.gridIconSize,
+                                                    showExtension: viewModel.showFileExtensions,
                                                     selectedURLs: Array(viewModel.selectedFileSet),
                                                     onSelect: {
                                                         let wasVisible = viewModel.isDetailInspectorVisible

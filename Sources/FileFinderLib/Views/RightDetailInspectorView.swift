@@ -221,7 +221,7 @@ public struct RightDetailInspectorView: View {
 
                 // File Name
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(item.name)
+                    Text(item.displayName(showExtension: viewModel.showFileExtensions))
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundColor(Color(nsColor: .labelColor))
                         .lineLimit(2)
