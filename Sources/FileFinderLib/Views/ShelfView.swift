@@ -76,6 +76,7 @@ public struct ShelfView: View {
                                 FileCardView(
                                     item: item,
                                     isSelected: isSelected,
+                                    showExtension: viewModel?.showFileExtensions ?? false,
                                     selectedURLs: viewModel.map { Array($0.selectedFileSet) },
                                     onSelect: {
                                         if let vm = viewModel {

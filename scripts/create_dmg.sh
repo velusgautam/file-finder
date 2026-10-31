@@ -43,7 +43,16 @@ hdiutil create \
 # Create convenient unversioned link
 cp "${DMG_PATH}" "${LATEST_DMG}"
 
-# 4. Clean up staging
+# 4. Sign DMG if signing identity provided
+if [ -n "${CODESIGN_IDENTITY:-}" ] && [ "${CODESIGN_IDENTITY}" != "-" ]; then
+    echo "=== Signing DMG with '${CODESIGN_IDENTITY}' ==="
+    codesign --force --sign "${CODESIGN_IDENTITY}" "${DMG_PATH}"
+    if [ -f "${LATEST_DMG}" ]; then
+        codesign --force --sign "${CODESIGN_IDENTITY}" "${LATEST_DMG}"
+    fi
+fi
+
+# 5. Clean up staging
 rm -rf "${STAGING_DIR}"
 
 echo "=== DMG Build Successful! ==="

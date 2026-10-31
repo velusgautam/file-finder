@@ -65,10 +65,15 @@ cat <<EOF > "${CONTENTS_DIR}/Info.plist"
 </plist>
 EOF
 
-# 4. Ad-hoc codesign
-echo "=== Signing app bundle ==="
-codesign -s - --force --deep "${APP_BUNDLE}"
+# 4. Codesign (Developer ID if specified, otherwise ad-hoc)
+SIGNING_IDENTITY="${CODESIGN_IDENTITY:--}"
+echo "=== Signing app bundle with '${SIGNING_IDENTITY}' ==="
+if [ "${SIGNING_IDENTITY}" = "-" ]; then
+    codesign -s - --force --deep "${APP_BUNDLE}"
+else
+    codesign --force --options runtime --deep --sign "${SIGNING_IDENTITY}" "${APP_BUNDLE}"
+fi
 
 echo "=== Verification ==="
-codesign -v "${APP_BUNDLE}"
+codesign -v --deep --strict "${APP_BUNDLE}" || codesign -v "${APP_BUNDLE}"
 echo "Successfully created and verified: ${APP_BUNDLE}"

@@ -283,13 +283,22 @@ public final class SQLiteIndexService: @unchecked Sendable {
     }
 
     private func performSearchRecords(matching query: String, limit: Int) -> [IndexedFileRecord] {
-        guard let db = db, !query.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
-        let pattern = "%\(query)%"
+        let cleanQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let db = db, !cleanQuery.isEmpty else { return [] }
+        let pattern = "%\(cleanQuery)%"
         let sql = """
         SELECT url, name, fileSize, modificationDate, creationDate, category, origin, originURL, sha256, ocrText, parentPath
         FROM file_index
         WHERE name LIKE ? OR ocrText LIKE ?
-        ORDER BY modificationDate DESC
+        ORDER BY
+            CASE
+                WHEN LOWER(name) = LOWER(?) THEN 1000
+                WHEN LOWER(name) LIKE LOWER(?) || '%' THEN 700
+                WHEN LOWER(name) LIKE '% ' || LOWER(?) || '%' OR LOWER(name) LIKE '%_' || LOWER(?) || '%' OR LOWER(name) LIKE '%-' || LOWER(?) || '%' THEN 500
+                WHEN LOWER(name) LIKE '%' || LOWER(?) || '%' THEN 300
+                ELSE 50
+            END DESC,
+            modificationDate DESC
         LIMIT ?;
         """
 
@@ -299,7 +308,13 @@ public final class SQLiteIndexService: @unchecked Sendable {
 
         sqlite3_bind_text(stmt, 1, pattern, -1, Self.transientDestructor)
         sqlite3_bind_text(stmt, 2, pattern, -1, Self.transientDestructor)
-        sqlite3_bind_int(stmt, 3, Int32(limit))
+        sqlite3_bind_text(stmt, 3, cleanQuery, -1, Self.transientDestructor)
+        sqlite3_bind_text(stmt, 4, cleanQuery, -1, Self.transientDestructor)
+        sqlite3_bind_text(stmt, 5, cleanQuery, -1, Self.transientDestructor)
+        sqlite3_bind_text(stmt, 6, cleanQuery, -1, Self.transientDestructor)
+        sqlite3_bind_text(stmt, 7, cleanQuery, -1, Self.transientDestructor)
+        sqlite3_bind_text(stmt, 8, cleanQuery, -1, Self.transientDestructor)
+        sqlite3_bind_int(stmt, 9, Int32(limit))
 
         var results: [IndexedFileRecord] = []
         while sqlite3_step(stmt) == SQLITE_ROW {

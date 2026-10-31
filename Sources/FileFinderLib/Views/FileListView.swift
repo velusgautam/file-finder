@@ -37,7 +37,7 @@ public struct FileListView: View {
             case .name:
                 let cmp = f1.name.localizedCaseInsensitiveCompare(f2.name)
                 return isAscending ? (cmp == .orderedAscending) : (cmp == .orderedDescending)
-            case .dateModified, .dateCreated:
+            case .dateModified, .dateCreated, .relevance:
                 return isAscending ? f1.modificationDate < f2.modificationDate : f1.modificationDate > f2.modificationDate
             case .size:
                 return isAscending ? f1.itemCount < f2.itemCount : f1.itemCount > f2.itemCount
@@ -127,6 +127,7 @@ public struct FileListView: View {
                                     item: item,
                                     isOCRMatch: displayItem.isOCRMatch,
                                     isSelected: isSelected,
+                                    showExtension: viewModel.showFileExtensions,
                                     selectedURLs: Array(viewModel.selectedFileSet),
                                     onSelect: {
                                         let flags = NSEvent.modifierFlags
@@ -330,6 +331,7 @@ public struct FileListRowView: View {
     public let item: FileItem
     public let isOCRMatch: Bool
     public let isSelected: Bool
+    public let showExtension: Bool
     public let selectedURLs: [URL]?
     public let onSelect: () -> Void
     public let onTrash: () -> Void
@@ -341,6 +343,7 @@ public struct FileListRowView: View {
         item: FileItem,
         isOCRMatch: Bool,
         isSelected: Bool,
+        showExtension: Bool = false,
         selectedURLs: [URL]? = nil,
         onSelect: @escaping () -> Void,
         onTrash: @escaping () -> Void
@@ -348,6 +351,7 @@ public struct FileListRowView: View {
         self.item = item
         self.isOCRMatch = isOCRMatch
         self.isSelected = isSelected
+        self.showExtension = showExtension
         self.selectedURLs = selectedURLs
         self.onSelect = onSelect
         self.onTrash = onTrash
@@ -369,7 +373,7 @@ public struct FileListRowView: View {
                         .frame(width: 20, height: 20)
                 }
 
-                Text(item.name)
+                Text(item.displayName(showExtension: showExtension))
                     .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular, design: .rounded))
                     .foregroundColor(Color(nsColor: .labelColor))
                     .lineLimit(1)
