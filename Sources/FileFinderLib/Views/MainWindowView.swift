@@ -364,17 +364,19 @@ public struct MainWindowView: View {
                                         cardWidth: viewModel.gridIconSize,
                                         selectedURLs: Array(viewModel.selectedFileSet),
                                         onSelect: {
-                                            let flags = NSEvent.modifierFlags
-                                            if flags.contains(.command) {
-                                                viewModel.toggleFileSelection(item.item)
-                                            } else if flags.contains(.shift) {
-                                                viewModel.selectFileRange(to: item.item)
-                                            } else {
-                                                viewModel.selectSingleFile(item.item)
-                                            }
-                                            viewModel.selectedDuplicateGroup = nil
-                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                                viewModel.isDetailInspectorVisible = true
+                                            let wasVisible = viewModel.isDetailInspectorVisible
+                                            viewModel.handleFileClick(item.item)
+                                            if !wasVisible && viewModel.isDetailInspectorVisible {
+                                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                                        proxy.scrollTo(item.item.id, anchor: .center)
+                                                    }
+                                                }
+                                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+                                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                                        proxy.scrollTo(item.item.id, anchor: .center)
+                                                    }
+                                                }
                                             }
                                         },
                                         onTrash: { fileToTrash in
@@ -385,6 +387,20 @@ public struct MainWindowView: View {
                                 }
                             }
                             .padding(28)
+                        }
+                        .onChange(of: viewModel.isDetailInspectorVisible) { _, isVisible in
+                            if isVisible, let currentFile = viewModel.selectedFile {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        proxy.scrollTo(currentFile.id, anchor: .center)
+                                    }
+                                }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        proxy.scrollTo(currentFile.id, anchor: .center)
+                                    }
+                                }
+                            }
                         }
                         .onChange(of: viewModel.selectedFile) { _, newFile in
                             if let file = newFile {
@@ -399,10 +415,7 @@ public struct MainWindowView: View {
                         items: viewModel.displayedItems,
                         viewModel: viewModel,
                         onSelect: { file in
-                            viewModel.selectedDuplicateGroup = nil
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                viewModel.isDetailInspectorVisible = true
-                            }
+                            viewModel.handleFileClick(file)
                         },
                         onTrash: { file in
                             viewModel.trashFile(file)
@@ -446,17 +459,19 @@ public struct MainWindowView: View {
                                         cardWidth: viewModel.gridIconSize,
                                         selectedURLs: Array(viewModel.selectedFileSet),
                                         onSelect: {
-                                            let flags = NSEvent.modifierFlags
-                                            if flags.contains(.command) {
-                                                viewModel.toggleFileSelection(item.item)
-                                            } else if flags.contains(.shift) {
-                                                viewModel.selectFileRange(to: item.item)
-                                            } else {
-                                                viewModel.selectSingleFile(item.item)
-                                            }
-                                            viewModel.selectedDuplicateGroup = nil
-                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                                viewModel.isDetailInspectorVisible = true
+                                            let wasVisible = viewModel.isDetailInspectorVisible
+                                            viewModel.handleFileClick(item.item)
+                                            if !wasVisible && viewModel.isDetailInspectorVisible {
+                                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                                        proxy.scrollTo(item.item.id, anchor: .center)
+                                                    }
+                                                }
+                                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+                                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                                        proxy.scrollTo(item.item.id, anchor: .center)
+                                                    }
+                                                }
                                             }
                                         },
                                         onTrash: { fileToTrash in
@@ -467,6 +482,20 @@ public struct MainWindowView: View {
                                 }
                             }
                             .padding(28)
+                        }
+                        .onChange(of: viewModel.isDetailInspectorVisible) { _, isVisible in
+                            if isVisible, let currentFile = viewModel.selectedFile {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        proxy.scrollTo(currentFile.id, anchor: .center)
+                                    }
+                                }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        proxy.scrollTo(currentFile.id, anchor: .center)
+                                    }
+                                }
+                            }
                         }
                         .onChange(of: viewModel.selectedFile) { _, newFile in
                             if let file = newFile {
@@ -481,10 +510,7 @@ public struct MainWindowView: View {
                         items: viewModel.displayedItems,
                         viewModel: viewModel,
                         onSelect: { file in
-                            viewModel.selectedDuplicateGroup = nil
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                viewModel.isDetailInspectorVisible = true
-                            }
+                            viewModel.handleFileClick(file)
                         },
                         onTrash: { file in
                             viewModel.trashFile(file)

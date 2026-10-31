@@ -78,7 +78,7 @@ public final class ScannerViewModel: ObservableObject {
 
     // Filter & Sorting State (Active across all views)
     @Published public var layoutMode: ViewLayoutMode = .grid
-    @Published public var gridIconSize: CGFloat = 185
+    @Published public var gridIconSize: CGFloat = 145
     @Published public var selectedCategoryFilter: ShelfCategory? = nil
     @Published public var selectedOriginFilter: DownloadOrigin? = nil
     @Published public var selectedSortOption: SortOption = .dateModified
@@ -1065,6 +1065,23 @@ public final class ScannerViewModel: ObservableObject {
     }
 
     // MARK: - Multi-File Selection
+    public func handleFileClick(_ file: FileItem) {
+        let flags = NSEvent.modifierFlags
+        if flags.contains(.command) {
+            toggleFileSelection(file)
+            // Do not open or force inspector during multi-selection
+        } else if flags.contains(.shift) {
+            selectFileRange(to: file)
+            // Do not open or force inspector during range selection
+        } else {
+            selectSingleFile(file)
+            selectedDuplicateGroup = nil
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                isDetailInspectorVisible = true
+            }
+        }
+    }
+
     public func selectSingleFile(_ file: FileItem) {
         selectedFolder = nil
         selectedFile = file

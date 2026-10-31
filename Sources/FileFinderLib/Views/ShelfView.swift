@@ -79,17 +79,14 @@ public struct ShelfView: View {
                                     selectedURLs: viewModel.map { Array($0.selectedFileSet) },
                                     onSelect: {
                                         if let vm = viewModel {
-                                            let flags = NSEvent.modifierFlags
-                                            if flags.contains(.command) {
-                                                vm.toggleFileSelection(item)
-                                            } else if flags.contains(.shift) {
-                                                vm.selectFileRange(to: item)
-                                            } else {
-                                                vm.selectSingleFile(item)
-                                            }
-                                            vm.selectedDuplicateGroup = nil
-                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                                vm.isDetailInspectorVisible = true
+                                            let wasVisible = vm.isDetailInspectorVisible
+                                            vm.handleFileClick(item)
+                                            if !wasVisible && vm.isDetailInspectorVisible {
+                                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                                        proxy.scrollTo(item.id, anchor: .center)
+                                                    }
+                                                }
                                             }
                                         }
                                     },

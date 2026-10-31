@@ -136,8 +136,8 @@ public struct FileListView: View {
                                             viewModel.selectFileRange(to: item)
                                         } else {
                                             viewModel.selectSingleFile(item)
+                                            onSelect(item)
                                         }
-                                        onSelect(item)
                                     },
                                     onTrash: { onTrash(item) }
                                 )
@@ -146,6 +146,20 @@ public struct FileListView: View {
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 6)
+                    }
+                    .onChange(of: viewModel.isDetailInspectorVisible) { _, isVisible in
+                        if isVisible, let currentFile = viewModel.selectedFile {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    proxy.scrollTo(currentFile.id, anchor: .center)
+                                }
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    proxy.scrollTo(currentFile.id, anchor: .center)
+                                }
+                            }
+                        }
                     }
                     .onChange(of: viewModel.selectedFile) { _, newFile in
                         if let file = newFile {

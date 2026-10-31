@@ -1,6 +1,75 @@
 import SwiftUI
 @preconcurrency import AppKit
 
+/// Observable state managing search input, results, and active keyboard index for Quick Search
+@MainActor
+public final class QuickSearchState: ObservableObject, @unchecked Sendable {
+    public static let shared = QuickSearchState()
+
+    @Published public var query: String = ""
+    @Published public var selectedIndex: Int = 0
+    @Published public var results: [FileItem] = []
+
+    public init() {}
+
+    /// Resets the search state to a completely fresh, empty list
+    public func reset() {
+        self.query = ""
+        self.selectedIndex = 0
+        self.results = []
+    }
+
+    /// Reactive live update: filters matching files as the user types
+    public func updateSearch(query newQuery: String, viewModel: ScannerViewModel?) {
+        let trimmed = newQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            self.results = []
+            self.selectedIndex = 0
+            return
+        }
+
+        var matchedMap: [URL: FileItem] = [:]
+        let lowerQuery = trimmed.lowercased()
+
+        // 1. Fast in-memory matching against loaded files
+        if let all = viewModel?.allFiles {
+            let parsed = NLQueryParser.parse(trimmed)
+            for file in all {
+                let nameLower = file.name.lowercased()
+                let extLower = file.fileExtension.lowercased()
+
+                // Direct substring matching on filename or extension
+                if nameLower.contains(lowerQuery) || extLower.contains(lowerQuery) {
+                    matchedMap[file.url] = file
+                    continue
+                }
+
+                // Natural language & keyword filter matching
+                let (matches, _) = parsed.filter.matchEvaluation(for: file, ocrText: viewModel?.ocrTextByFileURL[file.url])
+                if matches {
+                    matchedMap[file.url] = file
+                }
+            }
+        }
+
+        // 2. Persistent SQLite index search fallback
+        let sqliteResults = SQLiteIndexService.shared.searchFilesSync(matching: trimmed, limit: 50)
+        for file in sqliteResults {
+            if matchedMap[file.url] == nil {
+                matchedMap[file.url] = file
+            }
+        }
+
+        // Sort by most recent modification date
+        let sorted = matchedMap.values.sorted { $0.modificationDate > $1.modificationDate }
+        self.results = Array(sorted.prefix(40))
+
+        if self.selectedIndex >= self.results.count {
+            self.selectedIndex = max(0, self.results.count - 1)
+        }
+    }
+}
+
 /// Floating HUD style NSPanel controller for global quick search (summoned via ⇧⌘Space)
 @MainActor
 public final class QuickSearchPanelController: NSObject, @unchecked Sendable {
@@ -28,11 +97,14 @@ public final class QuickSearchPanelController: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Displays the centered, non-activating floating HUD panel
+    /// Displays the centered, non-activating floating HUD panel starting with an empty query
     public func show(with viewModel: ScannerViewModel? = nil) {
         if let vm = viewModel {
             self.viewModel = vm
         }
+
+        // Ensure state starts fresh with an empty search list
+        QuickSearchState.shared.reset()
 
         if panel == nil {
             let hudPanel = NSPanel(
@@ -55,8 +127,9 @@ public final class QuickSearchPanelController: NSObject, @unchecked Sendable {
 
         guard let panel = self.panel else { return }
 
-        // Host QuickSearchView
+        // Host QuickSearchView with shared state
         let contentView = QuickSearchView(
+            state: QuickSearchState.shared,
             viewModel: self.viewModel,
             onClose: { [weak self] in
                 self?.hide()
@@ -69,9 +142,10 @@ public final class QuickSearchPanelController: NSObject, @unchecked Sendable {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// Dismisses the Quick Search HUD panel
+    /// Dismisses the Quick Search HUD panel and clears the search state
     public func hide() {
         panel?.orderOut(nil)
+        QuickSearchState.shared.reset()
     }
 
     public var isVisible: Bool {
@@ -94,36 +168,16 @@ public final class QuickSearchPanelController: NSObject, @unchecked Sendable {
 
 /// Floating HUD View for quick search matching files with keyboard navigation
 public struct QuickSearchView: View {
+    @ObservedObject public var state: QuickSearchState
     public weak var viewModel: ScannerViewModel?
     public let onClose: () -> Void
 
-    @State private var query: String = ""
-    @State private var selectedIndex: Int = 0
     @FocusState private var isFieldFocused: Bool
 
-    public init(viewModel: ScannerViewModel? = nil, onClose: @escaping () -> Void) {
+    public init(state: QuickSearchState = QuickSearchState.shared, viewModel: ScannerViewModel? = nil, onClose: @escaping () -> Void) {
+        self.state = state
         self.viewModel = viewModel
         self.onClose = onClose
-    }
-
-    private var matchedFiles: [FileItem] {
-        guard let files = viewModel?.allFiles, !files.isEmpty else {
-            return []
-        }
-
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty {
-            // Show first 20 recent files
-            return Array(files.prefix(20))
-        }
-
-        let parsed = NLQueryParser.parse(trimmed)
-        let filtered = files.filter { file in
-            let (matches, _) = parsed.filter.matchEvaluation(for: file, ocrText: viewModel?.ocrTextByFileURL[file.url])
-            return matches
-        }
-
-        return Array(filtered.prefix(30))
     }
 
     public var body: some View {
@@ -134,7 +188,7 @@ public struct QuickSearchView: View {
                     .font(.system(size: 16, weight: .medium))
                     .foregroundColor(.accentColor)
 
-                TextField("Quick Search files, \"pdfs from last week\", dmg...", text: $query)
+                TextField("Quick Search files, \"pdfs from last week\", dmg...", text: $state.query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 15, design: .rounded))
                     .focused($isFieldFocused)
@@ -142,10 +196,9 @@ public struct QuickSearchView: View {
                         handleReturnKey(reveal: NSEvent.modifierFlags.contains(.command))
                     }
 
-                if !query.isEmpty {
+                if !state.query.isEmpty {
                     Button {
-                        query = ""
-                        selectedIndex = 0
+                        state.reset()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.secondary)
@@ -169,29 +222,46 @@ public struct QuickSearchView: View {
             Divider().opacity(0.3)
 
             // Results List
-            let results = matchedFiles
-            if results.isEmpty {
+            if state.query.trimmingCharacters(in: .whitespaces).isEmpty {
+                // Empty state when opened: prompt user to start typing
+                VStack(spacing: 12) {
+                    Spacer()
+                    Image(systemName: "text.magnifyingglass")
+                        .font(.system(size: 34))
+                        .foregroundColor(.secondary.opacity(0.35))
+                    Text("Type to start searching files & smart filters")
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundColor(.secondary)
+                    Text("Supports natural queries like \"dmg from last week\" or \"screenshots > 5MB\"")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary.opacity(0.7))
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if state.results.isEmpty {
+                // Query typed but no matches found
                 VStack(spacing: 8) {
                     Spacer()
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 28))
-                        .foregroundColor(.secondary.opacity(0.4))
-                    Text(query.isEmpty ? "No files indexed yet" : "No matching files found")
+                        .foregroundColor(.secondary.opacity(0.35))
+                    Text("No matching files found for \"\(state.query)\"")
                         .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundColor(.secondary)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                // Live updated matching results
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 2) {
-                            ForEach(Array(results.enumerated()), id: \.element.id) { index, item in
+                            ForEach(Array(state.results.enumerated()), id: \.element.id) { index, item in
                                 QuickSearchResultRow(
                                     item: item,
-                                    isSelected: index == selectedIndex,
+                                    isSelected: index == state.selectedIndex,
                                     onSelect: {
-                                        selectedIndex = index
+                                        state.selectedIndex = index
                                     },
                                     onOpen: {
                                         openFile(item)
@@ -206,7 +276,7 @@ public struct QuickSearchView: View {
                         .padding(.vertical, 6)
                         .padding(.horizontal, 8)
                     }
-                    .onChange(of: selectedIndex) { _, newIndex in
+                    .onChange(of: state.selectedIndex) { _, newIndex in
                         proxy.scrollTo(newIndex, anchor: .center)
                     }
                 }
@@ -224,8 +294,8 @@ public struct QuickSearchView: View {
 
                 Spacer()
 
-                if !results.isEmpty {
-                    Text("\(results.count) results")
+                if !state.results.isEmpty {
+                    Text("\(state.results.count) results")
                         .font(.system(size: 10.5, design: .rounded))
                         .foregroundColor(.secondary)
                 }
@@ -241,22 +311,21 @@ public struct QuickSearchView: View {
         .shadow(color: Color.black.opacity(0.22), radius: 24, y: 12)
         .onAppear {
             isFieldFocused = true
-            selectedIndex = 0
         }
-        .onChange(of: query) { _, _ in
-            selectedIndex = 0
+        .onChange(of: state.query) { _, newQuery in
+            state.updateSearch(query: newQuery, viewModel: viewModel)
         }
         // Keyboard navigation interceptors
         .onKeyPress(.upArrow) {
-            if selectedIndex > 0 {
-                selectedIndex -= 1
+            if state.selectedIndex > 0 {
+                state.selectedIndex -= 1
             }
             return .handled
         }
         .onKeyPress(.downArrow) {
-            let maxIndex = max(0, matchedFiles.count - 1)
-            if selectedIndex < maxIndex {
-                selectedIndex += 1
+            let maxIndex = max(0, state.results.count - 1)
+            if state.selectedIndex < maxIndex {
+                state.selectedIndex += 1
             }
             return .handled
         }
@@ -265,8 +334,7 @@ public struct QuickSearchView: View {
             return .handled
         }
         .onKeyPress(.space) {
-            // If field has no text, or space pressed with modifier or in navigation
-            if query.isEmpty || NSEvent.modifierFlags.contains(.option) {
+            if state.query.isEmpty || NSEvent.modifierFlags.contains(.option) {
                 previewSelectedItem()
                 return .handled
             }
@@ -289,15 +357,13 @@ public struct QuickSearchView: View {
     }
 
     private func previewSelectedItem() {
-        let results = matchedFiles
-        guard selectedIndex >= 0 && selectedIndex < results.count else { return }
-        QuickLookManager.shared.show(url: results[selectedIndex].url)
+        guard state.selectedIndex >= 0 && state.selectedIndex < state.results.count else { return }
+        QuickLookManager.shared.show(url: state.results[state.selectedIndex].url)
     }
 
     private func handleReturnKey(reveal: Bool) {
-        let results = matchedFiles
-        guard selectedIndex >= 0 && selectedIndex < results.count else { return }
-        let item = results[selectedIndex]
+        guard state.selectedIndex >= 0 && state.selectedIndex < state.results.count else { return }
+        let item = state.results[state.selectedIndex]
         if reveal {
             NSWorkspace.shared.activateFileViewerSelecting([item.url])
         } else {
