@@ -7,7 +7,7 @@ echo "=== Packaging File Finder into macOS DMG Installer ==="
 
 APP_NAME="File Finder"
 APP_BUNDLE="dist/${APP_NAME}.app"
-VERSION="1.0.0"
+VERSION="${APP_VERSION:-1.2.0}"
 DMG_NAME="File-Finder-${VERSION}.dmg"
 DMG_PATH="dist/${DMG_NAME}"
 LATEST_DMG="dist/File-Finder.dmg"
