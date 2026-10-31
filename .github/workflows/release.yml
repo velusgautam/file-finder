@@ -1,10 +1,12 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release version tag (e.g. v1.2.0)'
+        required: true
+        default: 'v1.2.0'
 
 permissions:
   contents: write
@@ -84,14 +86,19 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
-          API_KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
-          printf '%s' "$APPLE_API_KEY_P8" > "$API_KEY_PATH"
+          CLEAN_KEY_ID="$(echo -n "$APPLE_API_KEY_ID" | tr -d '[:space:]')"
+          CLEAN_ISSUER="$(echo -n "$APPLE_API_ISSUER" | tr -d '[:space:]')"
+          API_KEY_PATH="$RUNNER_TEMP/AuthKey_${CLEAN_KEY_ID}.p8"
 
-          echo "Submitting DMG to Apple Notary Service..."
+          # Write normalized PEM key with linebreaks
+          printf '%s\n' "$APPLE_API_KEY_P8" | sed 's/\\n/\n/g' > "$API_KEY_PATH"
+          chmod 600 "$API_KEY_PATH"
+
+          echo "Submitting DMG to Apple Notary Service (Key ID: $CLEAN_KEY_ID, Issuer: $CLEAN_ISSUER)..."
           xcrun notarytool submit "dist/File-Finder.dmg" \
             --key "$API_KEY_PATH" \
-            --key-id "$APPLE_API_KEY_ID" \
-            --issuer "$APPLE_API_ISSUER" \
+            --key-id "$CLEAN_KEY_ID" \
+            --issuer "$CLEAN_ISSUER" \
             --wait
 
           echo "Stapling notarization ticket to DMG..."
@@ -115,10 +122,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          if [ -z "$TAG" ] || [ "$TAG" = "main" ]; then
-            TAG="v1.2.0"
-          fi
+          TAG="${{ github.event.inputs.tag || 'v1.2.0' }}"
           echo "Creating or updating GitHub Release for $TAG"
           gh release create "$TAG" \
             dist/File-Finder-*.dmg \
